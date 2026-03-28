@@ -133,6 +133,7 @@ CRITICAL RULES:
 10. **SKILL DAMAGE** – When creating a skill with damage, the damage array [min, max] must have min ≥ 1. Never create a skill that deals zero damage. If the skill is purely utility (no damage), set "damage" to null.
 11. **WEAPON SKILLS** – When the player acquires a weapon through "addItems" (any gun, pistol, rifle, shotgun, SMG, blade, knife, sword, bat, etc.), you MUST also populate "newSkill" with a combat skill matching that weapon. A firearm gets a ranged "Shoot" skill. A melee weapon gets a strike/slash skill. Set damage, energyCost, cooldown, and statScaling appropriate to the weapon type. If the player already has a skill for that weapon type, skip this.
 12. **QTE** – Use the "qte" field (instead of "combat") for sudden reaction moments: a sniper shot, a grenade, a car nearly hitting you, a trap triggering, a speeding drone, falling debris. These are one-off dangers the player must physically react to, NOT a full fight. Only use one per response, never alongside "combat". Leave "qte" out entirely when nothing sudden is happening.
+13. **TRAGEDY CALLBACKS** – The player's defining tragedy is "${State.tragedy?.name || ''}". Let it surface organically over time: an NPC who was connected to the event, a location that triggers memory, a side quest tied to who or what was lost. Never force it every single turn — but never forget it either.
 
 The player's current state:
 - Class: ${State.playerClass}
