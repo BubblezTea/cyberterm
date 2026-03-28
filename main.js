@@ -64,10 +64,34 @@ async function startGameFromMenu() {
 let ccBackstoryNpcs = [];
 
 const TRAGEDIES = [
-  { id: 'violence', name: 'VIOLENCE', desc: 'Someone put a bullet in something you loved.' },
-  { id: 'betrayal', name: 'BETRAYAL', desc: 'The one person you trusted sold you out.' },
-  { id: 'loss', name: 'LOSS', desc: 'The city took someone from you that it had no right to.' },
-  { id: 'corruption', name: 'CORRUPTION', desc: 'The system made you part of the machine before you knew what was happening.' },
+  {
+    id: 'violence', name: 'VIOLENCE',
+    desc: 'Someone put a bullet in something you loved.',
+    effect: 'Hardened reflexes. +1 STR, +1 AGI.',
+    statBonus: { str:1, agi:1 },
+    startItem: { name:'Bloodstained Dog Tags', amount:1, description:'All that remains of them. You never take it off.', unsellable:true, slot:null, statBonus:null },
+  },
+  {
+    id: 'betrayal', name: 'BETRAYAL',
+    desc: 'The one person you trusted sold you out.',
+    effect: 'You learned to read people before they read you. +2 CHA.',
+    statBonus: { cha:2 },
+    startItem: { name:'Encrypted Burner', amount:1, description:'You never use the same number twice anymore.', unsellable:true, slot:null, statBonus:null },
+  },
+  {
+    id: 'loss', name: 'LOSS',
+    desc: 'The city took someone from you that it had no right to.',
+    effect: 'Grief made you harder to kill. +2 END.',
+    statBonus: { end:2 },
+    startItem: { name:'Faded Photograph', amount:1, description:'A face you carry everywhere. Reminds you why you keep going.', unsellable:true, slot:null, statBonus:null },
+  },
+  {
+    id: 'corruption', name: 'CORRUPTION',
+    desc: 'The system made you part of the machine before you knew what was happening.',
+    effect: 'You understand how the machine works. +1 INT, +1 TEC.',
+    statBonus: { int:1, tec:1 },
+    startItem: { name:'Revoked Corp Access Card', amount:1, description:'Flagged as terminated. Still opens the old maintenance doors.', unsellable:true, slot:null, statBonus:null },
+  },
 ];
 
 const UPBRINGINGS = [
@@ -348,14 +372,42 @@ function renderTragedyChoices() {
   });
 }
 
-function chooseTragedy(id) {
-  State.tragedy = TRAGEDIES.find(t => t.id === id);
+async function chooseTragedy(id) {
+  const tragedy = TRAGEDIES.find(t => t.id === id);
+  State.tragedy = tragedy;
 
-  document.getElementById('ccStep2').style.display = 'none';
-  document.getElementById('ccStep3').style.display = 'flex';
-  document.getElementById('ccStepLabel').textContent = 'STEP 4 / 5';
+  document.querySelectorAll('.cc-tragedy-btn').forEach(b => {
+    b.disabled = true;
+    b.style.opacity = b.dataset.id === id ? '1' : '0.3';
+  });
 
-  renderUpbringingChoices();
+  const storyEl = document.getElementById('ccTragedyStory');
+  storyEl.style.display = 'block';
+  storyEl.innerHTML = '<div class="cc-loading">RECONSTRUCTING MEMORY...</div>';
+
+  let storyText = tragedy.desc;
+  try {
+    const prompt = `Write exactly 2-3 sentences about how this specific tragedy happened to ${State.playerName}, who grew up in ${State.origin}. Tragedy: ${tragedy.name} — ${tragedy.desc}. Their backstory: ${State.backstory}. Second person. Dark, specific, personal to this character and district. Only the narrative text, nothing else.`;
+    const raw = await queueRequest(() => callProvider([{ role:'user', content:prompt }], 200));
+    storyText = raw.trim().replace(/^["']|["']$/g, '');
+  } catch(e) {
+    storyText = tragedy.desc;
+  }
+
+  storyEl.innerHTML = `
+    <div class="tragedy-reveal">
+      <div class="tragedy-reveal-name">${tragedy.name}</div>
+      <div class="tragedy-reveal-text">${storyText}</div>
+      <div class="tragedy-reveal-effect">${tragedy.effect}</div>
+      <button id="tragedyContinueBtn" class="cc-next-btn" style="margin-top:12px;">CONTINUE →</button>
+    </div>`;
+
+  document.getElementById('tragedyContinueBtn').addEventListener('click', () => {
+    document.getElementById('ccStep2').style.display = 'none';
+    document.getElementById('ccStep3').style.display = 'flex';
+    document.getElementById('ccStepLabel').textContent = 'STEP 4 / 5';
+    renderUpbringingChoices();
+  });
 }
 
 function renderUpbringingChoices() {
@@ -490,7 +542,7 @@ PLAYER IDENTITY:
 - Name: ${State.playerName}
 - Grew up in: ${State.origin}
 - Backstory: ${State.backstory}
-- Defining tragedy: ${State.tragedy.name} — ${State.tragedy.desc}
+- Defining tragedy: ${State.tragedy.name} — ${State.tragedy.desc} | Mechanical effect: ${State.tragedy.effect} | Let this surface naturally in quests, NPC reactions, and world details. Do not force it every turn.
 - Upbringing: ${State.upbringing.name} (d20 roll: ${State.upbringingRoll}/20) — ${State.upbringing.result}
 - Known contacts from past: ${ccBackstoryNpcs.map(n => `${n.name} (${n.relationship})`).join(', ') || 'none yet'}
 
@@ -514,6 +566,20 @@ Do not omit these fields — the game depends on them.`;
 
   const resp = await Llm.send(traitPrompt, 'FIRST_TURN=true', 1600);
   Engine.applyResponse(resp);
+
+  if (State.tragedy && State.tragedy.statBonus) {
+    Object.entries(State.tragedy.statBonus).forEach(([k, v]) => {
+      if (State.stats[k] !== undefined) State.stats[k] = Math.min(10, State.stats[k] + v);
+    });
+    State.maxHp     = StatSystem.calcMaxHp();
+    State.hp        = Math.min(State.hp, State.maxHp);
+    State.maxEnergy = StatSystem.calcMaxEnergy();
+    State.energy    = Math.min(State.energy, State.maxEnergy);
+  }
+  if (State.tragedy && State.tragedy.startItem) {
+    const alreadyHas = State.inventory.find(i => i.name === State.tragedy.startItem.name);
+    if (!alreadyHas) State.inventory.push({ ...State.tragedy.startItem });
+  }
 
   if (State.hp <= 0) checkDeath(resp.deathReason || 'Your actions led to your demise...');
 
