@@ -183,8 +183,11 @@ const Ui = {
     }
     panel.innerHTML = locBadge + State.npcs.map(n => `
       <div class="npc-entry">
-        <span class="npc-name">${n.name}</span>
-        <span class="npc-rel rel-${n.relationship}">${n.relationship.toUpperCase()}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="npc-name">${n.name}</span>
+          <span class="npc-rel rel-${n.relationship}">${n.relationship.toUpperCase()}</span>
+        </div>
+        ${n.description ? `<div class="npc-desc">${n.description}</div>` : ''}
       </div>`).join('');
   },
 
