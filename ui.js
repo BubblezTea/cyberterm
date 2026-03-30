@@ -79,6 +79,7 @@ const Ui = {
     this.renderQuests();
     this.renderTrait();
     this.renderStats();
+    this.renderSkills();
   },
 
   renderInventory() {
@@ -152,6 +153,7 @@ const Ui = {
             <div class="gear-slot-name">${item.name}</div>
             <div class="gear-slot-bonus">${bonusStr}</div>
           </div>
+          ${(item.slot === null || item.slot === 'null') && item.gui ? `<button class="gear-activate-btn" data-slot="${key}">▶</button>` : ''}
           <button class="gear-unequip-btn" data-slot="${key}">✕</button>
         </div>`;
       }
@@ -165,11 +167,67 @@ const Ui = {
 
     panel.querySelectorAll('.gear-unequip-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        State.equipped[btn.dataset.slot] = null;
-        State.maxHp     = StatSystem.calcMaxHp();
+        const slot = btn.dataset.slot;
+        const oldItem = State.equipped[slot];
+        
+        State.equipped[slot] = null;
+        
+        // Recalculate max HP and energy
+        const oldMaxHp = State.maxHp;
+        State.maxHp = StatSystem.calcMaxHp();
         State.maxEnergy = StatSystem.calcMaxEnergy();
+        
+        // Clamp current HP/energy to new max values
+        if (State.hp > State.maxHp) {
+          State.hp = State.maxHp;
+          Ui.addInstant(`Your max HP decreased to ${State.maxHp}!`, 'system');
+        }
+        if (State.energy > State.maxEnergy) {
+          State.energy = State.maxEnergy;
+        }
+        
         Ui.updateHeader();
         Ui.renderSidebar();
+      });
+    });
+
+    panel.querySelectorAll('.gear-activate-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const item = State.equipped[btn.dataset.slot];
+        if (!item) return;
+
+        if (item.gui) {
+          // Reuse stored GUI – no LLM call, no narration
+          GuiEngine.show(item.gui);
+        } else {
+          Ui.setInputLocked(true);
+          try {
+            const resp = await Llm.send(`[EQUIPPED ITEM ACTIVATED] Player activates their equipped "${item.name}". Description: "${item.description}". Generate appropriate GUI or narration.`);
+            Engine.applyResponse(resp);
+            if (resp.gui) {
+              // Store GUI for future use and show it
+              item.gui = resp.gui;
+              GuiEngine.show(resp.gui);
+              // Do NOT enqueue narration – GUI is the interface
+            } else if (resp.narration) {
+              Ui.enqueue(resp.narration, 'narrator');
+            }
+          } catch (err) {
+            console.error('Activation error:', err);
+            Ui.addInstant('[ACTIVATION FAILED]', 'system');
+          } finally {
+            // Wait for typing to finish before unlocking input
+            const waitForUnlock = () => {
+              if (Ui.isTyping || Ui.typeQueue.length) setTimeout(waitForUnlock, 200);
+              else {
+                Ui.setInputLocked(false);
+                Ui.updateHeader();
+                Ui.renderSidebar();
+              }
+            };
+            waitForUnlock();
+          }
+        }
       });
     });
   },
@@ -181,14 +239,24 @@ const Ui = {
       panel.innerHTML = locBadge + '<div class="panel-empty">[ NO CONTACTS ]</div>';
       return;
     }
-    panel.innerHTML = locBadge + State.npcs.map(n => `
-      <div class="npc-entry" style="cursor:pointer;">
+
+    const alive = State.npcs.filter(n => n.relationship !== 'Dead');
+    const dead  = State.npcs.filter(n => n.relationship === 'Dead');
+
+    const renderEntry = n => `
+      <div class="npc-entry ${n.relationship === 'Dead' ? 'npc-dead' : ''}" style="cursor:pointer;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <span class="npc-name">${n.name}</span>
           <span class="npc-rel rel-${n.relationship}">${n.relationship.toUpperCase()}</span>
         </div>
         ${n.description ? `<div class="npc-desc">${n.description}</div>` : ''}
-      </div>`).join('');
+      </div>`;
+
+    const deadSection = dead.length
+      ? `<div class="panel-empty" style="margin-top:10px;margin-bottom:4px;">// DECEASED //</div>${dead.map(renderEntry).join('')}`
+      : '';
+
+    panel.innerHTML = locBadge + alive.map(renderEntry).join('') + deadSection;
 
     panel.querySelectorAll('.npc-entry').forEach(el => {
       el.addEventListener('click', () => el.classList.toggle('expanded'));
@@ -201,6 +269,7 @@ const Ui = {
       panel.innerHTML = '<div class="panel-empty">[ NO ACTIVE QUESTS ]</div>';
       return;
     }
+    
     panel.innerHTML = State.quests.map(q => `
       <div class="quest-entry">
         <div class="qtitle">
@@ -208,7 +277,9 @@ const Ui = {
           <span class="qstatus ${q.status==='active'?'active-q':q.status}">${q.status.toUpperCase()}</span>
         </div>
         <div class="qdesc">${q.description}</div>
-      </div>`).join('');
+        ${q.reward ? `<div class="quest-reward">💰 REWARD: ${q.reward}</div>` : ''}
+      </div>
+    `).join('');
   },
 
   renderTrait() {
@@ -225,6 +296,95 @@ const Ui = {
       </div>`).join('');
   },
 
+  renderSkills() {
+    const panel = document.getElementById('tab-skills');
+    if (!panel) return;
+    if (!State.skills.length) {
+      panel.innerHTML = '<div class="panel-empty">[ NO SKILLS ]</div>';
+      return;
+    }
+    panel.innerHTML = State.skills.map((skill, idx) => `
+      <div class="skill-card" data-skill="${skill.name}">
+        <div class="skill-name">${skill.name}</div>
+        <div class="skill-desc">${skill.description || ''}</div>
+        <div class="skill-meta">
+          ${skill.damage ? `${skill.damage[0]}-${skill.damage[1]} dmg` : 'Utility'} · 
+          ${skill.energyCost} en · 
+          ${skill.cooldown > 0 ? `${skill.cooldown}t cd` : 'no cd'}
+        </div>
+        <div style="display:flex; gap:8px; margin-top:6px;">
+          <button class="skill-use-btn" data-idx="${idx}">USE</button>
+          <button class="skill-edit-btn" data-idx="${idx}">EDIT</button>
+        </div>
+      </div>
+    `).join('');
+
+    panel.querySelectorAll('.skill-use-btn').forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        const skill = State.skills[i];
+        Ui.showSkillTargetModal(skill);
+      });
+    });
+    panel.querySelectorAll('.skill-edit-btn').forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        const skill = State.skills[i];
+        SkillBuilder.open(skill);
+      });
+    });
+  },
+
+  showSkillTargetModal(skill) {
+    const modal = document.getElementById('skillTargetModal');
+    const titleEl = document.getElementById('skillTargetTitle');
+    const questionEl = document.getElementById('skillTargetQuestion');
+    const inputEl = document.getElementById('skillTargetInput');
+    const suggestionsContainer = document.getElementById('skillTargetSuggestions');
+    const confirmBtn = document.getElementById('skillTargetConfirm');
+    const cancelBtn = document.getElementById('skillTargetCancel');
+    const closeBtn = document.getElementById('skillTargetClose');
+
+    titleEl.textContent = `USE: ${skill.name}`;
+    questionEl.textContent = `Where / what do you want to target with ${skill.name}?`;
+    inputEl.value = '';
+    suggestionsContainer.innerHTML = '';
+
+    // Optional: Add dynamic suggestions based on current location
+    const suggestions = ['surroundings', 'door', 'computer', 'floor', 'wall', 'enemy', 'ally'];
+    suggestions.forEach(sug => {
+      const chip = document.createElement('span');
+      chip.className = 'skill-target-suggestion';
+      chip.textContent = sug;
+      chip.addEventListener('click', () => {
+        inputEl.value = sug;
+        confirmBtn.click();
+      });
+      suggestionsContainer.appendChild(chip);
+    });
+
+    const closeModal = () => modal.classList.remove('open');
+    const onConfirm = () => {
+      let target = inputEl.value.trim();
+      if (!target) target = 'surroundings';
+      closeModal();
+      const message = `I use ${skill.name} on ${target}`;
+      const gameInput = document.getElementById('playerInput');
+      gameInput.value = message;
+      handlePlayerInput();
+    };
+
+    confirmBtn.onclick = onConfirm;
+    cancelBtn.onclick = closeModal;
+    closeBtn.onclick = closeModal;
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+    modal.classList.add('open');
+    inputEl.focus();
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') onConfirm();
+      if (e.key === 'Escape') closeModal();
+    });
+  },
+
   renderStats() {
     const panel = document.getElementById('tab-stats');
     if (!panel) return;
@@ -239,24 +399,31 @@ const Ui = {
       { key:'end', label:'END', color:'#cc4400', desc:'Max HP & resistance' },
     ];
 
-    const xpPct    = Math.round((State.xp / State.xpToNext) * 100);
-    const dodgePct = Math.min(40, s.agi*3);
-    const critPct  = Math.min(30, Math.floor(s.agi*1.5));
-    const dmgBonus = Math.floor(s.str*0.4);
+    const xpPct = Math.round((State.xp / State.xpToNext) * 100);
+    const totalAgi = s.agi + StatSystem.getEquipBonus('agi');
+    const totalStr = s.str + StatSystem.getEquipBonus('str');
+    const dodgePct = Math.min(40, Math.floor(totalAgi * 0.3));
+    const critPct  = Math.min(30, Math.floor(totalAgi * 0.15));
+    const dmgBonus = Math.floor(totalStr * 0.04);
 
     const statRows = statDefs.map(d => {
-      const baseVal  = s[d.key];
-      const overflow = State.statOverflow[d.key] || 0;
-      const display  = overflow > 0 ? `${baseVal} (+${overflow})` : baseVal;
-      const pct      = Math.round((baseVal/10)*100);
-      const canUp    = State.statPoints > 0;
-      return `<div class="rs-row">
-        <span class="rs-label" title="${d.desc}">${d.label}</span>
-        <div class="rs-bar"><div class="rs-fill" style="width:${pct}%;background:${d.color}"></div></div>
-        <span class="rs-val">${display}</span>
-        <button class="rs-plus ${canUp?'':'rs-plus-off'}" data-stat="${d.key}" ${canUp?'':'disabled'}>+</button>
-      </div>`;
-    }).join('');
+    const baseVal    = s[d.key];
+    const equipBonus = StatSystem.getEquipBonus(d.key);
+    const pct        = Math.min(100, baseVal + equipBonus);
+
+    const canUp = State.statPoints > 0;
+
+    const display = equipBonus > 0
+      ? `${baseVal} <span class="rs-bonus gear">(+${equipBonus})</span>`
+      : `${baseVal}`;
+
+    return `<div class="rs-row">
+      <span class="rs-label" title="${d.desc}">${d.label}</span>
+      <div class="rs-bar"><div class="rs-fill" style="width:${pct}%;background:${d.color}"></div></div>
+      <span class="rs-val">${display}</span>
+      <button class="rs-plus ${canUp?'':'rs-plus-off'}" data-stat="${d.key}" ${canUp?'':'disabled'}>+</button>
+    </div>`;
+  }).join('');
 
     const skillCards = State.skills.length ? State.skills.map(sk => {
       const dmgStr = sk.damage ? `${sk.damage[0]}-${sk.damage[1]}dmg` : 'utility';
@@ -294,8 +461,8 @@ const Ui = {
       btn.addEventListener('click', () => {
         const stat = btn.dataset.stat;
         if (State.statPoints <= 0) return;
-        if (State.stats[stat] < 10) State.stats[stat]++;
-        else State.statOverflow[stat] = (State.statOverflow[stat]||0)+1;
+        if (State.stats[stat] < 100) State.stats[stat]++;
+        else return;
         State.statPoints--;
         State.maxHp     = StatSystem.calcMaxHp();
         State.hp        = Math.min(State.hp, State.maxHp);
@@ -345,22 +512,59 @@ function showItemPopup(item) {
       unequipBtn.className = 'item-popup-unequip-btn';
       unequipBtn.textContent = 'UNEQUIP';
       unequipBtn.addEventListener('click', () => {
-        State.equipped[equippedSlot] = null;
-        State.maxHp     = StatSystem.calcMaxHp();
+        const slot = equippedSlot;
+        const oldItem = State.equipped[slot];
+        
+        State.equipped[slot] = null;
+        
+        const oldMaxHp = State.maxHp;
+        State.maxHp = StatSystem.calcMaxHp();
         State.maxEnergy = StatSystem.calcMaxEnergy();
+        
+        if (State.hp > State.maxHp) {
+          State.hp = State.maxHp;
+          Ui.addInstant(`Your max HP decreased to ${State.maxHp}!`, 'system');
+        }
+        if (State.energy > State.maxEnergy) {
+          State.energy = State.maxEnergy;
+        }
+        
         Ui.updateHeader();
         Ui.renderSidebar();
         popup.classList.remove('open');
       });
-      actionsEl.appendChild(unequipBtn);
+      if (item.gui) {
+        const activateBtn = document.createElement('button');
+        activateBtn.className = 'item-popup-use-btn';
+        activateBtn.textContent = 'ACTIVATE';
+        activateBtn.addEventListener('click', () => {
+          popup.classList.remove('open');
+          GuiEngine.show(item.gui);
+        });
+        actionsEl.appendChild(activateBtn);
+      }
     } else {
       const equipBtn = document.createElement('button');
       equipBtn.className = 'item-popup-equip-btn';
       equipBtn.textContent = 'EQUIP';
       equipBtn.addEventListener('click', () => {
+        const oldItem = State.equipped[item.slot];
+        
         State.equipped[item.slot] = item;
-        State.maxHp     = StatSystem.calcMaxHp();
+        
+        // Recalculate stats
+        const oldMaxHp = State.maxHp;
+        State.maxHp = StatSystem.calcMaxHp();
         State.maxEnergy = StatSystem.calcMaxEnergy();
+        
+        // HP/Energy may increase, but don't exceed new max
+        State.hp = Math.min(State.hp, State.maxHp);
+        State.energy = Math.min(State.energy, State.maxEnergy);
+        
+        if (State.maxHp > oldMaxHp) {
+          Ui.addInstant(`Equipped ${item.name}: Max HP +${State.maxHp - oldMaxHp}`, 'system');
+        }
+        
         Ui.updateHeader();
         Ui.renderSidebar();
         popup.classList.remove('open');
@@ -369,26 +573,80 @@ function showItemPopup(item) {
     }
   }
 
-  // consumable use button
-  if (/stim|heal|med|inject|boost|patch|syringe/i.test(item.name) && item.amount > 0) {
-    const useBtn = document.createElement('button');
-    useBtn.className = 'item-popup-use-btn';
-    useBtn.textContent = 'USE';
-    useBtn.addEventListener('click', () => {
-      const healAmt = 20 + State.stats.tec * 2;
-      State.hp = Math.min(State.maxHp, State.hp + healAmt);
-      if (window.Sound) Sound.itemUse();
-      item.amount--;
-      if (item.amount <= 0) {
-        const idx = State.inventory.indexOf(item);
-        if (idx !== -1) State.inventory.splice(idx, 1);
-      }
-      Ui.addInstant(`You use ${item.name}: +${healAmt} HP`, 'system');
-      Ui.updateHeader();
-      Ui.renderSidebar();
-      popup.classList.remove('open');
-    });
-    actionsEl.appendChild(useBtn);
+  // consumable/usable buttons — only for items without an equipment slot
+  if (!item.slot) {
+    if (item.gui) {
+      const useBtn = document.createElement('button');
+      useBtn.className = 'item-popup-use-btn';
+      useBtn.textContent = 'USE';
+      useBtn.addEventListener('click', () => {
+        popup.classList.remove('open');
+        GuiEngine.show(item.gui);
+      });
+      actionsEl.appendChild(useBtn);
+    } else if (item.statBonus && (item.statBonus.hp || item.statBonus.energy)) {
+      const useBtn = document.createElement('button');
+      useBtn.className = 'item-popup-use-btn';
+      useBtn.textContent = 'USE';
+      useBtn.addEventListener('click', () => {
+        popup.classList.remove('open');
+        if (item.statBonus.hp) {
+          State.maxHp += item.statBonus.hp;
+          State.hp += item.statBonus.hp;
+          Ui.addInstant(`[ PERMANENT +${item.statBonus.hp} MAX HP ]`, 'system');
+        }
+        if (item.statBonus.energy) {
+          State.maxEnergy += item.statBonus.energy;
+          State.energy += item.statBonus.energy;
+          Ui.addInstant(`[ PERMANENT +${item.statBonus.energy} MAX ENERGY ]`, 'system');
+        }
+        item.amount--;
+        if (item.amount <= 0) {
+          const idx = State.inventory.indexOf(item);
+          if (idx !== -1) State.inventory.splice(idx, 1);
+        }
+        Ui.updateHeader();
+        Ui.renderSidebar();
+        if (window.Sound) Sound.itemUse();
+      });
+      actionsEl.appendChild(useBtn);
+    } else if (!/stim|heal|med|inject|boost|patch|syringe/i.test(item.name)) {
+      const useBtn = document.createElement('button');
+      useBtn.className = 'item-popup-use-btn';
+      useBtn.textContent = 'USE';
+      useBtn.addEventListener('click', async () => {
+        popup.classList.remove('open');
+        if (item.gui) {
+          GuiEngine.show(item.gui);
+        } else {
+          Ui.setInputLocked(true);
+          try {
+            const resp = await Llm.send(`[ITEM USED] Player uses "${item.name}". Description: "${item.description}". Generate appropriate GUI or narration for using this item.`);
+            Engine.applyResponse(resp);
+            if (resp.gui) {
+              item.gui = resp.gui;
+              GuiEngine.show(resp.gui);
+            } else if (resp.narration) {
+              Ui.enqueue(resp.narration, 'narrator');
+            }
+          } catch (err) {
+            console.error('Item use error:', err);
+            Ui.addInstant('[USE FAILED]', 'system');
+          } finally {
+            const waitForUnlock = () => {
+              if (Ui.isTyping || Ui.typeQueue.length) setTimeout(waitForUnlock, 200);
+              else {
+                Ui.setInputLocked(false);
+                Ui.updateHeader();
+                Ui.renderSidebar();
+              }
+            };
+            waitForUnlock();
+          }
+        }
+      });
+      actionsEl.appendChild(useBtn);
+    }
   }
 
   popup.classList.add('open');
@@ -440,11 +698,15 @@ const Console = {
         this.log('  heal <n> / damage <n>');
         this.log('  give <n> / take <n>     credits');
         this.log('─── inventory ───────────────────────────────', 'header');
-        this.log('  add item <name> <amt> <desc...>');
+        this.log('  add item <name> | [amt] | [slot] | [stats] | <desc>', 'header');
+        this.log('    slot: head/body/hands/back/implant/weapon/armor');
+        this.log('    stats: hp=15,str=2,agi=1 (comma-separated)');
+        this.log('    example: add item Cyberdeck | 1 | implant | hp=15 | Increases max HP');
         this.log('  remove item <name> [amt]');
         this.log('  clear inventory');
         this.log('─── npcs ────────────────────────────────────', 'header');
-        this.log('  set npc <name> <Friendly|Neutral|Hostile|Suspicious|Ally>');
+        this.log('  add npc <name> | <rel> | <description>   add or update NPC', 'header');
+        this.log('  set npc <name> | <rel> | <description>   update NPC', 'header');
         this.log('  remove npc <name>');
         this.log('─── quests ──────────────────────────────────', 'header');
         this.log('  add quest <title> | <description>');
@@ -531,8 +793,8 @@ const Console = {
     }
   },
 
-  cmdSet(args) {
-    const sub = (args[0]||'').toLowerCase();
+  cmdSet(args, raw) {
+    const sub = (args[0] || '').toLowerCase();
     switch(sub) {
       case 'hp': {
         const n = parseInt(args[1]);
@@ -547,12 +809,12 @@ const Console = {
         this.log(`credits = ${State.credits}`, 'ok'); break;
       }
       case 'stat': {
-        const key = (args[1]||'').toLowerCase();
+        const key = (args[1] || '').toLowerCase();
         const n   = parseInt(args[2]);
         if (!['str','agi','int','cha','tec','end'].includes(key)||isNaN(n)) {
           this.log('usage: set stat <key> <n>', 'err'); break;
         }
-        State.stats[key] = Math.max(1, Math.min(10, n));
+        State.stats[key] = Math.max(1, Math.min(100, n));
         State.maxHp      = StatSystem.calcMaxHp();
         State.maxEnergy  = StatSystem.calcMaxEnergy();
         this.log(`${key} = ${State.stats[key]}`, 'ok'); break;
@@ -568,7 +830,7 @@ const Console = {
         State.location = loc; this.log(`location = "${loc}"`, 'ok'); break;
       }
       case 'time': {
-        const t = args[1]||'';
+        const t = args[1] || '';
         const m = t.match(/^(\d{1,2}):(\d{2})$/);
         if (!m) { this.log('usage: set time HH:MM', 'err'); break; }
         State.gameMinutes = parseInt(m[1])*60+parseInt(m[2]);
@@ -580,14 +842,35 @@ const Console = {
         State.gameDay = n; this.log(`day = ${n}`, 'ok'); break;
       }
       case 'npc': {
-        const validRels = ['Friendly','Neutral','Hostile','Suspicious','Ally'];
-        const rel  = args[args.length-1];
-        const name = args.slice(1,args.length-1).join(' ');
-        if (!name||!validRels.includes(rel)) { this.log(`usage: set npc <n> <rel>`, 'err'); break; }
-        const ex = State.npcs.find(n => n.name.toLowerCase()===name.toLowerCase());
-        if (ex) ex.relationship = rel;
-        else    State.npcs.push({ name, relationship:rel });
-        this.log(`npc "${name}" = ${rel}`, 'ok'); break;
+        // Format: set npc <name> | <relationship> | <description>
+        const rest = raw.replace(/^set\s+npc\s*/i, '');   // ← raw is now defined
+        const parts = rest.split('|').map(p => p.trim());
+
+        if (parts.length < 2) {
+          this.log('usage: set npc <name> | <relationship> | <description>', 'err');
+          break;
+        }
+
+        const name = parts[0];
+        const relationship = parts[1];
+        const description = parts.length > 2 ? parts[2] : '';
+
+        const validRels = ['Friendly', 'Neutral', 'Hostile', 'Suspicious', 'Ally', 'Dead'];
+        if (!validRels.includes(relationship)) {
+          this.log(`relationship must be one of: ${validRels.join(', ')}`, 'err');
+          break;
+        }
+
+        const ex = State.npcs.find(n => n.name.toLowerCase() === name.toLowerCase());
+        if (ex) {
+          ex.relationship = relationship;
+          if (description) ex.description = description;
+          this.log(`updated npc "${name}" -> ${relationship}`, 'ok');
+        } else {
+          State.npcs.push({ name, relationship, description });
+          this.log(`added npc "${name}" (${relationship})`, 'ok');
+        }
+        break;
       }
       case 'quest': {
         const status = args[args.length-1].toLowerCase();
@@ -624,22 +907,51 @@ const Console = {
   cmdAdd(args, raw) {
     const sub = (args[0]||'').toLowerCase();
     if (sub === 'item') {
-      const n   = parseInt(args[2]);
-      const amt = isNaN(n) ? 1 : n;
-      const name = args[1] || '';
-      const descStart = isNaN(n) ? 2 : 3;
-      const desc = args.slice(descStart).join(' ');
-      if (!name) { this.log('usage: add item <name> [amt] <desc...>', 'err'); return; }
-      const ex = State.inventory.find(i => i.name.toLowerCase()===name.toLowerCase());
-      if (ex) { ex.amount += amt; }
-      else    { State.inventory.push({ name:capitalize(name), amount:amt, description:desc, unsellable:false, slot:null, statBonus:null }); }
+      // Format: add item <name> | [amt] | [slot] | [statBonus] | <description>
+      // Example: add item Cyberdeck Implant | 1 | implant | hp=15 | Increases max HP by 15
+      
+      const rest = raw.replace(/^add\s+item\s+/i, '');
+      const parts = rest.split('|').map(p => p.trim());
+      
+      if (parts.length < 2) {
+        this.log('usage: add item <name> | [amt] | [slot] | [statBonus] | <description>', 'err');
+        return;
+      }
+      
+      const name = parts[0];
+      const amt = parts[1] && !isNaN(parseInt(parts[1])) ? parseInt(parts[1]) : 1;
+      const slot = parts[2] || null;
+      const statBonusStr = parts[3] || null;
+      const description = parts[4] || '';
+      
+      // Parse stat bonuses if provided (format: hp=15,str=2,etc)
+      let statBonus = null;
+      if (statBonusStr) {
+        statBonus = {};
+        statBonusStr.split(',').forEach(pair => {
+          const [key, val] = pair.split('=');
+          if (key && val && !isNaN(parseInt(val))) {
+            statBonus[key.toLowerCase()] = parseInt(val);
+          }
+        });
+      }
+      
+      const ex = State.inventory.find(i => i.name.toLowerCase() === name.toLowerCase());
+      if (ex) {
+        ex.amount += amt;
+      } else {
+        State.inventory.push({
+          name: capitalize(name),
+          amount: amt,
+          description: description || 'No description',
+          unsellable: false,
+          slot: slot,
+          statBonus: statBonus
+        });
+      }
       this.log(`added ${amt}x ${name}`, 'ok');
-    } else if (sub === 'quest') {
-      const rest  = raw.replace(/^add\s+quest\s+/i,'');
-      const [title,...descParts] = rest.split('|');
-      if (!title?.trim()) { this.log('usage: add quest <title> | <description>', 'err'); return; }
-      State.quests.push({ title:capitalize(title.trim()), description:descParts.join('|').trim(), status:'active' });
-      this.log(`quest added: "${title.trim()}"`, 'ok');
+      if (slot) this.log(`  slot: ${slot}`, 'info');
+      if (statBonus) this.log(`  bonuses: ${Object.entries(statBonus).map(([k,v]) => `${k}+${v}`).join(', ')}`, 'info');
     } else if (sub === 'skill') {
       const rest  = raw.replace(/^add\s+skill\s+/i,'');
       const parts = rest.split('|');
@@ -678,39 +990,77 @@ const Console = {
       }
       State.traits.push({ name: tName, description: tDesc });
       this.log(`trait added: "${tName}" (${State.traits.length}/2)`, 'ok');
+    } else if (sub === 'npc') {
+      // Format: add npc <name> | <relationship> | <description>
+      const rest = raw.replace(/^add\s+npc\s*/i, '');
+      const parts = rest.split('|').map(p => p.trim());
       
+      if (parts.length < 2) {
+        this.log('usage: add npc <name> | <relationship> | <description>', 'err');
+        return;
+      }
+      
+      const name = parts[0];
+      const relationship = parts[1];
+      const description = parts.length > 2 ? parts[2] : '';
+      
+      const validRels = ['Friendly', 'Neutral', 'Hostile', 'Suspicious', 'Ally', 'Dead'];
+      if (!validRels.includes(relationship)) {
+        this.log(`relationship must be one of: ${validRels.join(', ')}`, 'err');
+        return;
+      }
+      
+      const ex = State.npcs.find(n => n.name.toLowerCase() === name.toLowerCase());
+      if (ex) {
+        ex.relationship = relationship;
+        if (description) ex.description = description;
+        this.log(`updated npc "${name}" -> ${relationship}`, 'ok');
+      } else {
+        State.npcs.push({ name, relationship, description });
+        this.log(`added npc "${name}" (${relationship})`, 'ok');
+      }
     } else {
       this.log(`unknown add target: ${sub}`, 'err');
     }
   },
 
-  cmdRemove(args) {
-    const sub = (args[0]||'').toLowerCase();
+  cmdRemove(args, raw) {
+    const sub = (args[0] || '').toLowerCase();  // This is the second word, e.g., "npc", "item", etc.
+    
     if (sub === 'item') {
       const name = args.slice(1, args.length - (isNaN(parseInt(args[args.length-1])) ? 0 : 1)).join(' ') || args[1];
       const amt  = isNaN(parseInt(args[args.length-1])) ? 1 : parseInt(args[args.length-1]);
-      const idx  = State.inventory.findIndex(i => i.name.toLowerCase()===name.toLowerCase());
-      if (idx===-1) { this.log(`item not found: "${name}"`, 'err'); return; }
+      const idx  = State.inventory.findIndex(i => i.name.toLowerCase() === name.toLowerCase());
+      if (idx === -1) { this.log(`item not found: "${name}"`, 'err'); return; }
       State.inventory[idx].amount -= amt;
-      if (State.inventory[idx].amount <= 0) State.inventory.splice(idx,1);
+      if (State.inventory[idx].amount <= 0) State.inventory.splice(idx, 1);
       this.log(`removed ${amt}x ${name}`, 'ok');
+      
     } else if (sub === 'npc') {
       const name = args.slice(1).join(' ');
-      const idx  = State.npcs.findIndex(n => n.name.toLowerCase()===name.toLowerCase());
-      if (idx===-1) { this.log(`npc not found: "${name}"`, 'err'); return; }
-      State.npcs.splice(idx,1); this.log(`removed npc "${name}"`, 'ok');
+      const idx = State.npcs.findIndex(n => n.name.toLowerCase() === name.toLowerCase());
+      if (idx === -1) { this.log(`npc not found: "${name}"`, 'err'); return; }
+      State.npcs.splice(idx, 1);
+      this.log(`removed npc "${name}"`, 'ok');
+      
     } else if (sub === 'quest') {
       const title = args.slice(1).join(' ');
-      const idx   = State.quests.findIndex(q => q.title.toLowerCase()===title.toLowerCase());
-      if (idx===-1) { this.log(`quest not found: "${title}"`, 'err'); return; }
-      State.quests.splice(idx,1); this.log(`removed quest "${title}"`, 'ok');
+      const idx = State.quests.findIndex(q => q.title.toLowerCase() === title.toLowerCase());
+      if (idx === -1) { this.log(`quest not found: "${title}"`, 'err'); return; }
+      State.quests.splice(idx, 1);
+      this.log(`removed quest "${title}"`, 'ok');
+      
     } else if (sub === 'skill') {
       const sname = args.slice(1).join(' ');
-      const idx   = State.skills.findIndex(s => s.name.toLowerCase()===sname.toLowerCase());
-      if (idx===-1) { this.log(`skill not found: "${sname}"`, 'err'); return; }
-      State.skills.splice(idx,1); this.log(`removed skill "${sname}"`, 'ok');
+      const idx = State.skills.findIndex(s => s.name.toLowerCase() === sname.toLowerCase());
+      if (idx === -1) { this.log(`skill not found: "${sname}"`, 'err'); return; }
+      State.skills.splice(idx, 1);
+      this.log(`removed skill "${sname}"`, 'ok');
+      
     } else if (sub === 'inventory') {
-      State.inventory = []; this.log('inventory cleared', 'ok');
+      State.inventory = [];
+      this.log('inventory cleared', 'ok');
+      
     } else if (sub === 'trait') {
       const name = args.slice(1).join(' ');
       if (!name) {
@@ -723,9 +1073,10 @@ const Console = {
         return;
       }
       State.traits.splice(idx, 1);
-  this.log(`removed trait "${name}"`, 'ok');
+      this.log(`removed trait "${name}"`, 'ok');
+      
     } else {
       this.log(`unknown remove target: ${sub}`, 'err');
     }
-  },
+  }
 };

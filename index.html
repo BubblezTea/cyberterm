@@ -3,8 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>CYBERTERM // v0.9</title>
+  <title>CYBERTERM // v<span id="version-title"></span></title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="gui_styles.css">
+  <link rel="stylesheet" href="skillBuilder.css">
+  <script>
+    // === SINGLE VERSION CONTROL ===
+    const GAME_VERSION = "2.17";
+    // Update title and any version displays
+    document.addEventListener('DOMContentLoaded', () => {
+      document.title = `CYBERTERM // v${GAME_VERSION}`;
+      const versionSpans = document.querySelectorAll('.version-number');
+      versionSpans.forEach(span => span.textContent = GAME_VERSION);
+    });
+  </script>
 </head>
 <body>
 
@@ -12,7 +24,7 @@
 <div id="mainMenuScreen" class="screen">
   <div style="display:flex; flex-direction:column; align-items:flex-start; justify-content:center; height:100%; padding-left: 80px; gap:32px;">
     <div class="boot-logo" style="font-size: 64px;">CYBERTERM</div>
-    <div class="boot-sub">NEURAL NARRATIVE ENGINE // v0.9</div>
+    <div class="boot-sub">NEURAL NARRATIVE ENGINE // v<span class="version-number"></span></div>
     <div style="display:flex; gap:24px;">
       <button id="menuSettingsBtn" class="hdr-action-btn" style="padding:12px 24px; font-size:16px;">⚙ SETTINGS</button>
       <button id="menuStartBtn" class="hdr-action-btn" style="padding:12px 24px; font-size:16px; background:var(--green-lo);">▶ START</button>
@@ -25,7 +37,7 @@
 <!-- ========== BOOT SCREEN ========== -->
 <div id="bootScreen" class="screen active">
   <div class="boot-logo">CYBERTERM</div>
-  <div class="boot-sub">NEURAL NARRATIVE ENGINE // v0.9</div>
+  <div class="boot-sub">NEURAL NARRATIVE ENGINE // v<span class="version-number"></span></div>
   <div class="boot-loader"></div>
   <div class="boot-status" id="bootStatus">INITIALIZING...</div>
 </div>
@@ -53,6 +65,16 @@
       <div id="ccLocationLoading" class="cc-loading" style="display:none;">QUERYING CITY DATABASES...</div>
       <div id="ccLocationDesc" style="margin-top: 20px;"></div>
       <div id="ccLocationError" class="cc-error"></div>
+    </div>
+
+    <!-- STEP 3: CLASS SELECTION -->
+    <div id="ccStepClass" class="cc-step" style="display:none;">
+      <div class="cc-question">YOUR EDGE</div>
+      <div id="ccClassGrid" class="cc-grid"></div>
+      <div id="ccClassLoading" class="cc-loading" style="display:none;">LOADING CLASS DATA...</div>
+      <div id="ccClassDesc" style="margin-top: 20px; display: none;"></div>
+      <div id="ccClassError" class="cc-error"></div>
+      <button id="ccClassContinueBtn" class="cc-next-btn" style="display: none;">CONTINUE →</button>
     </div>
 
     <!-- STEP 3: BACKSTORY + TRAGEDY -->
@@ -132,6 +154,7 @@
         <button class="tab-btn" data-tab="quests">QUEST</button>
         <button class="tab-btn" data-tab="trait">TRAIT</button>
         <button class="tab-btn" data-tab="stats">STATS</button>
+        <button class="tab-btn" data-tab="skills">SKILL</button>
       </div>
 
       <div class="tab-panel active" id="tab-inv"></div>
@@ -140,6 +163,7 @@
       <div class="tab-panel" id="tab-quests"></div>
       <div class="tab-panel" id="tab-trait"></div>
       <div class="tab-panel" id="tab-stats"></div>
+      <div class="tab-panel" id="tab-skills"></div>
     </div>
   </div>
 </div>
@@ -148,41 +172,53 @@
 <!-- ========== COMBAT OVERLAY ========== -->
 <div id="combatOverlay">
   <div id="combatPanel">
-    <div id="ceEnemy">
-      <div class="ce-header">
-        <span class="ce-name" id="ceEnemyName">ENEMY</span>
-        <span class="ce-level" id="ceEnemyLevel">LVL 1</span>
+
+    <div id="ceHeader">
+      <div id="ceRoundBadge">
+        <span class="ce-round-tag">RND</span>
+        <span id="ceRound" class="ce-round-num">1</span>
       </div>
-      <div class="ce-desc" id="ceEnemyDesc"></div>
-      <div class="ce-hp-row">
-        <div class="ce-hp-bar"><div class="ce-hp-fill" id="ceHpFill" style="width:100%"></div></div>
-        <span class="ce-hp-text" id="ceHpText">100/100</span>
+      <div id="ceTurnDisplay">
+        <span class="ce-turn-pip">◈</span>
+        <span id="ceTurnLabel">YOUR TURN</span>
+        <span class="ce-turn-pip">◈</span>
       </div>
-      <div class="ce-statuses" id="ceStatuses"></div>
-    </div>
-
-    <div id="ceRoundBar">
-      ROUND <span class="ce-round-num" id="ceRound">1</span>
-      &nbsp;|&nbsp; <span id="ceTurnLabel" style="color:var(--green)">YOUR TURN</span>
-    </div>
-
-    <div id="combatLog"></div>
-
-    <div id="cePlayer">
-      <div id="cpBars">
-        <div class="cp-bar-row">
-          <span class="cp-bar-label">HP</span>
-          <div class="cp-bar"><div class="cp-bar-fill hp-fill" id="cpHpFill"></div></div>
-          <span class="cp-bar-val" id="cpHpText"></span>
+      <div id="ceVitals">
+        <div class="ce-vital-row">
+          <span class="ce-vital-lbl">HP</span>
+          <div class="ce-vital-bar"><div class="ce-vital-fill ce-hp-fill" id="cpHpFill"></div></div>
+          <span class="ce-vital-val" id="cpHpText">—</span>
         </div>
-        <div class="cp-bar-row">
-          <span class="cp-bar-label">EN</span>
-          <div class="cp-bar"><div class="cp-bar-fill en-fill" id="cpEnFill"></div></div>
-          <span class="cp-bar-val" id="cpEnText"></span>
+        <div class="ce-vital-row">
+          <span class="ce-vital-lbl">EN</span>
+          <div class="ce-vital-bar"><div class="ce-vital-fill ce-en-fill" id="cpEnFill"></div></div>
+          <span class="ce-vital-val" id="cpEnText">—</span>
         </div>
         <div id="cpStatuses"></div>
       </div>
+    </div>
+
+    <div id="ceBattlefield">
+      <div id="ceCombatantsCol">
+        <div class="ce-col-label">HOSTILES</div>
+        <div id="ceEnemyContainer"></div>
+        <div class="ce-col-label ce-allies-label" id="ceAllyLabel">ALLIES</div>
+        <div id="ceAllyContainer"></div>
+      </div>
+      <div id="combatLog"></div>
+    </div>
+
+    <div id="ceActionBar">
       <div id="combatSkillGrid"></div>
+    </div>
+
+  </div>
+  <div id="combatChatPanel">
+    <div id="combatChatLog"></div>
+    <div id="combatChatInputRow">
+      <span class="chat-prompt">[TALK]</span>
+      <input type="text" id="combatChatInput" placeholder="say something..." autocomplete="off" spellcheck="false">
+      <button id="combatChatSendBtn">SEND</button>
     </div>
   </div>
 </div>
@@ -217,6 +253,7 @@
         <button class="provider-btn" id="provGemini">GEMINI</button>
         <button class="provider-btn" id="provQwen">QWEN</button>
         <button class="provider-btn" id="provDeepseek">DEEPSEEK</button>
+        <button class="provider-btn" id="provHuggingface">HF</button>
       </div>
     </div>
 
@@ -290,6 +327,16 @@
       <input class="settings-input" id="cfgDeepseekModel" placeholder="deepseek-chat">
     </div>
   </div>
+  <div class="settings-provider-fields" id="huggingfaceFields" style="display:none">
+    <div class="settings-group">
+      <div class="settings-label">API TOKEN</div>
+      <input class="settings-input" id="cfgHfKey" type="password" placeholder="hf_...">
+    </div>
+    <div class="settings-group">
+      <div class="settings-label">MODEL</div>
+      <input class="settings-input" id="cfgHfModel" placeholder="mistralai/Mistral-7B-Instruct-v0.3">
+    </div>
+  </div>
 
     <div class="settings-msg" id="settingsMsg"></div>
 
@@ -340,6 +387,25 @@
   </div>
 </div>
 
+<!-- Skill Target Modal -->
+<div id="skillTargetModal" class="modal-overlay">
+  <div class="skill-target-box">
+    <div class="skill-target-header">
+      <span class="skill-target-title" id="skillTargetTitle">USE SKILL</span>
+      <button class="skill-target-close" id="skillTargetClose">✕</button>
+    </div>
+    <div class="skill-target-body">
+      <div class="skill-target-question" id="skillTargetQuestion">What do you want to target?</div>
+      <input type="text" id="skillTargetInput" class="skill-target-input" placeholder="e.g., door, computer, Ark, ground..." autocomplete="off" spellcheck="false">
+      <div class="skill-target-suggestions" id="skillTargetSuggestions"></div>
+    </div>
+    <div class="skill-target-actions">
+      <button class="skill-target-cancel" id="skillTargetCancel">CANCEL</button>
+      <button class="skill-target-confirm" id="skillTargetConfirm">USE</button>
+    </div>
+  </div>
+</div>
+
 <!-- ========== ITEM POPUP ========== -->
 <div id="itemPopup">
   <div class="item-popup-box">
@@ -362,6 +428,11 @@
   </div>
 </div>
 
+<!-- GUI OVERLAY -->
+<div id="guiOverlay">
+  <div id="guiContainer"></div>
+</div>
+
 <!-- ========== SCRIPTS ========== -->
 <script src="config.js"></script>
 <script src="sound.js"></script>
@@ -370,7 +441,11 @@
 <script src="llm.js"></script>
 <script src="ui.js"></script>
 <script src="combat.js"></script>
+<script src="gui.js"></script>
+<script src="charCreate.js"></script>
+<script src="skillBuilder.js"></script>
 <script src="main.js"></script>
+<script src="events.js"></script>
 
 </body>
 </html>

@@ -43,6 +43,12 @@ const DEEPSEEK_CONFIG = {
   url:    'https://api.deepseek.com/v1/chat/completions',
 };
 
+const HUGGINGFACE_CONFIG = {
+  apiKey: _savedCfg.hfKey   || '',
+  model:  _savedCfg.hfModel || 'mistralai/Mistral-7B-Instruct-v0.3',
+  url:    'https://api-inference.huggingface.co/v1/chat/completions',
+};
+
 function saveAiConfig() {
   localStorage.setItem('ct_ai_config', JSON.stringify({
     provider:       AI_PROVIDER,
@@ -56,14 +62,16 @@ function saveAiConfig() {
     openrouterModel:OPENROUTER_CONFIG.model,
     geminiKey:      GEMINI_CONFIG.apiKey,
     geminiModel:    GEMINI_CONFIG.model,
-    qwenKey:      QWEN_CONFIG.apiKey,
-    qwenModel:    QWEN_CONFIG.model,
-    deepseekKey:   DEEPSEEK_CONFIG.apiKey,
-    deepseekModel: DEEPSEEK_CONFIG.model,
+    qwenKey:        QWEN_CONFIG.apiKey,
+    qwenModel:      QWEN_CONFIG.model,
+    deepseekKey:    DEEPSEEK_CONFIG.apiKey,
+    deepseekModel:  DEEPSEEK_CONFIG.model,
+    hfKey:          HUGGINGFACE_CONFIG.apiKey,
+    hfModel:        HUGGINGFACE_CONFIG.model,
   }));
 }
 
-const MAX_TOKENS = 2500;
+const MAX_TOKENS = 5000;
 
 // ─── request queue ─────────────────────────────────────
 let lastRequestTime = 0;
